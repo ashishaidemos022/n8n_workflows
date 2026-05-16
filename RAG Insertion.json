@@ -1,0 +1,358 @@
+{
+  "name": "RAG Insertion",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Upload File",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "file",
+              "fieldType": "file"
+            }
+          ]
+        },
+        "options": {
+          "path": "/upload-rag-doc"
+        }
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        -240,
+        -32
+      ],
+      "id": "e469da06-6dc3-4edc-91e5-4019a69ba8b7",
+      "name": "On form submission",
+      "webhookId": "484d07bb-19b3-416f-970b-2feeecbb77a5"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "file",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        -16,
+        -32
+      ],
+      "id": "d379e8d6-00e5-4775-b093-39af48856495",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    fullDocument: $input.first().json.text,\n    fileName: $input.first().binary?.file?.fileName ?? 'document.pdf'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        -32
+      ],
+      "id": "617dd6bc-9c20-4c7c-a33e-6ec8a6106a74",
+      "name": "Stash document"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fullText = $json.fullDocument;\nconst fileName = $json.fileName;\nconst chunkSize = 3200;   // ~800 tokens\nconst overlap = 400;       // ~100 tokens\n\nconst chunks = [];\nfor (let i = 0; i < fullText.length; i += (chunkSize - overlap)) {\n  const piece = fullText.slice(i, i + chunkSize);\n  if (piece.trim().length < 100) continue;  // skip tiny tail chunks\n  chunks.push({\n    json: {\n      chunkIndex: chunks.length,\n      chunkContent: piece,\n      fullDocument: fullText,\n      fileName: fileName\n    }\n  });\n}\nreturn chunks;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        -32
+      ],
+      "id": "3340fb57-fad6-4d64-b69c-dd1eda9910e5",
+      "name": "Chunks"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 200,\n  \"system\": \"You produce a 1-2 sentence context for a chunk of text within a larger document, to improve search retrieval. Output ONLY the context. No preamble, no quotes, no commentary.\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"text\",\n          \"text\": {{ JSON.stringify(\"<document>\\n\" + $json.fullDocument + \"\\n</document>\") }},\n          \"cache_control\": {\"type\": \"ephemeral\"}\n        },\n        {\n          \"type\": \"text\",\n          \"text\": {{ JSON.stringify(\"Here is the chunk we want to situate within the document:\\n<chunk>\\n\" + $json.chunkContent + \"\\n</chunk>\\n\\nGive a 1-2 sentence context for this chunk to improve retrieval. Output ONLY the context.\") }}\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        656,
+        -32
+      ],
+      "id": "955b1dd4-5941-444d-8273-9e21ea63a4bf",
+      "name": "Generate context (Claude)",
+      "credentials": {
+        "anthropicApi": {
+          "id": "BsoMez4BNwa17pY1",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const contexts = $input.all();              // 12 Claude responses\nconst chunks = $('Chunks').all();            // 12 original chunks\n\nreturn contexts.map((item, i) => {\n  const ctx = item.json.content[0].text.trim();\n  const chunkRef = chunks[i].json;\n\n  return {\n    json: {\n      content: chunkRef.chunkContent,\n      contextualized_content: `${ctx}\\n\\n${chunkRef.chunkContent}`,\n      metadata: {\n        file_name: chunkRef.fileName,\n        chunk_index: chunkRef.chunkIndex\n      }\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -32
+      ],
+      "id": "6152de82-aa3f-46fb-8ab8-6fd47eee7d91",
+      "name": "Combine chunk + context"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.voyageai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"input\": [{{ JSON.stringify($json.contextualized_content) }}],\n  \"model\": \"voyage-3-large\",\n  \"output_dimension\": 1024,\n  \"input_type\": \"document\"\n}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 25000
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1104,
+        -32
+      ],
+      "id": "c40c8d6e-8e01-4c68-9bca-a89839aca353",
+      "name": "Voyage embed (document)",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "PhyehwXfXXEqm3Ud",
+          "name": "Voyage AI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableId": "documents",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $json.content }}"
+            },
+            {
+              "fieldId": "contextualized_content",
+              "fieldValue": "={{ $json.contextualized_content }}"
+            },
+            {
+              "fieldId": "metadata",
+              "fieldValue": "={{ $json.metadata }}"
+            },
+            {
+              "fieldId": "embedding",
+              "fieldValue": "={{ $json.embedding_str }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1536,
+        -32
+      ],
+      "id": "948a9b2c-1ec0-451f-8b1f-debeb366b78d",
+      "name": "Insert in Supabase",
+      "credentials": {
+        "supabaseApi": {
+          "id": "ABjdqcd2kUuZQtA8",
+          "name": "Supabase RAG Testing"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const voyageItems = $input.all();           // 12 Voyage responses\nconst refs = $('Combine chunk + context').all();  // 12 paired chunks\n\nreturn voyageItems.map((item, i) => {\n  const embedding = item.json.data[0].embedding;\n  const ref = refs[i].json;\n\n  return {\n    json: {\n      content: ref.content,\n      contextualized_content: ref.contextualized_content,\n      metadata: ref.metadata,\n      embedding_str: `[${embedding.join(',')}]`\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        -32
+      ],
+      "id": "15188ecf-2f83-4f59-9ecd-1e06e6359a61",
+      "name": "Format for Supabase"
+    },
+    {
+      "parameters": {
+        "content": "CONTEXTUAL RETRIEVAL",
+        "height": 288,
+        "width": 496
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        560,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "42a0ea3e-d14f-48af-92be-33509442687b",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "DATA EXTRACTION & CHUNKING",
+        "height": 288,
+        "width": 608,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -64,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "c0e50208-58c9-488f-b975-fdec3a2fe9d2",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "Embeddings & Insertion into Vector Database",
+        "height": 288,
+        "width": 576,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1072,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "dc9c4f73-ea69-4b41-8846-35557b46fbf2",
+      "name": "Sticky Note4"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Stash document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stash document": {
+      "main": [
+        [
+          {
+            "node": "Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunks": {
+      "main": [
+        [
+          {
+            "node": "Generate context (Claude)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate context (Claude)": {
+      "main": [
+        [
+          {
+            "node": "Combine chunk + context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine chunk + context": {
+      "main": [
+        [
+          {
+            "node": "Voyage embed (document)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Voyage embed (document)": {
+      "main": [
+        [
+          {
+            "node": "Format for Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format for Supabase": {
+      "main": [
+        [
+          {
+            "node": "Insert in Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "b9ea3be6-2837-43f3-be3c-55951be0d6f1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5ab9b4c37eb8b43602696add22a41d849e518c0ab0c7b3dc643eabbb296fcd72"
+  },
+  "id": "iK3Hqkko1rqEyH5a",
+  "tags": []
+}
