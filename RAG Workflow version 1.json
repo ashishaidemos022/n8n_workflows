@@ -1,0 +1,1136 @@
+{
+  "name": "RAG Workflow version 1",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {
+          "responseMode": "lastNode"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        64
+      ],
+      "id": "bad573b5-aebe-4940-9289-c6af1f0be437",
+      "name": "When chat message received",
+      "webhookId": "22c135f3-4860-4a10-9972-f96fad12d802"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f44f3ea2-0159-4ba5-b198-b72df9e8979a",
+              "name": "originalQuery",
+              "value": "={{ $json.chatInput }}",
+              "type": "string"
+            },
+            {
+              "id": "a52d6222-5653-4207-926d-5613b975cdea",
+              "name": "currentQuery",
+              "value": "={{ $json.chatInput }}",
+              "type": "string"
+            },
+            {
+              "id": "5603b836-b235-449b-8dc5-276410363efd",
+              "name": "retryCount",
+              "value": "0",
+              "type": "string"
+            },
+            {
+              "id": "8bd08723-81f7-4c6b-bd5a-f071cb4e9b24",
+              "name": "maxRetries",
+              "value": "2",
+              "type": "string"
+            },
+            {
+              "id": "3bbc03f8-1a6f-4c8b-b4d6-a7a6be4bc71c",
+              "name": "started_at",
+              "value": "={{ Date.now() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        64
+      ],
+      "id": "e183ae31-c941-4b1f-b414-2ed6e18078be",
+      "name": "Init State"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-4-6",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-6"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json.currentQuery }}"
+            }
+          ]
+        },
+        "options": {
+          "system": "You are a routing classifier for a document Q&A assistant about a SPECIFIC PRODUCT CATALOG. The assistant has access to detailed product information that the user wants help with.\n\nDefault to RETRIEVE. Only choose DIRECT in narrow, clearly-defined cases.\n\nChoose DIRECT only when ALL of these are true:\n- The message is pure greeting, smalltalk, or meta-question about you (\"hi\", \"how are you\", \"what can you do\")\n- It contains zero product-relevant nouns (no shoes, fit, occasion, color, size, price, brand, SKU, etc.)\n- Answering it correctly does NOT depend on knowing what's in the catalog\n\nChoose RETRIEVE for everything else, including:\n- Any question naming or asking about products, even generically (\"running shoes\", \"loafers\", \"boots\")\n- Questions about occasions, use cases, or recommendations (\"for a wedding\", \"for travel\", \"for wide feet\")\n- Care, sizing, materials, prices, comparisons\n- Anything where the catalog MIGHT contain the answer\n\nWhen in doubt, ALWAYS RETRIEVE. A wasted retrieval is fine; a hallucinated answer is not.\n\nOutput ONLY a single JSON object:\n{\"decision\": \"DIRECT\" | \"RETRIEVE\", \"reason\": \"<one sentence>\"}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        672,
+        64
+      ],
+      "id": "78b555f1-6869-4cb2-8da7-4d364cbec6f8",
+      "name": "1. Router",
+      "credentials": {
+        "anthropicApi": {
+          "id": "BsoMez4BNwa17pY1",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-4-6",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-6"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $('Init State').item.json.retryCount > 0 ? `Previous query failed to find relevant docs: \"${$('2. Rewriter').first().json.content?.[0]?.text ?? ''}\". Try a different angle.\\n\\nOriginal question: ` : '' }}{{ $('Init State').item.json.originalQuery }}"
+            }
+          ]
+        },
+        "options": {
+          "system": "You rewrite user queries to optimize them for semantic vector search. Your output will be embedded and used to find conceptually similar chunks via cosine similarity. It will NOT be used for keyword matching.\n\nRules:\n- On first pass, expand the query with creative semantic synonyms. Avoid using the user's literal words.\n- Expand synonyms and add related concepts that would appear in target documents (this helps embedding recall)\n- Preserve all constraints from the original query (e.g., \"wide feet\", \"for marathon training\", \"under $500\")\n- Output 5-15 tokens\n- No quotes, no punctuation, just space-separated terms\n- Do not include greeting language or filler (\"please\", \"I want\", \"tell me\")\n\nExamples:\nInput: \"What's the price of the Apex Runner?\"\nOutput: Apex Runner price cost retail MSRP pricing\n\nInput: \"I have wide feet and need a long-distance running shoe\"\nOutput: long-distance running shoe wide fit toe box marathon mileage cushioning\n\nInput: \"Which shoe should I wear for a black-tie wedding?\"\nOutput: black-tie formal evening wedding oxford patent leather mirror finish dress shoe\n\nNow rewrite the user's query."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        1472,
+        -32
+      ],
+      "id": "3d4d14c2-3667-41ea-ac2f-00f78c645e5e",
+      "name": "2. Rewriter",
+      "credentials": {
+        "anthropicApi": {
+          "id": "BsoMez4BNwa17pY1",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.voyageai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"input\": [{{ JSON.stringify($json.content[0].text.trim()) }}],\n  \"model\": \"voyage-3-large\",\n  \"output_dimension\": 1024,\n  \"input_type\": \"query\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2048,
+        -128
+      ],
+      "id": "ad8ea867-84ff-4e25-82a1-5c1bda006b34",
+      "name": "Voyage embed (query)",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "PhyehwXfXXEqm3Ud",
+          "name": "Voyage AI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hwunppacajmepdclbkmn.supabase.co/rest/v1/rpc/hybrid_search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": " Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh3dW5wcGFjYWptZXBkY2xia21uIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NDkyODkwMSwiZXhwIjoyMDcwNTA0OTAxfQ.buHCMhQt26qOjxjWSpqw92qu4oAFFbmkOBbbkw8mEgQ"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  original_query: $('Init State').item.json.originalQuery,\n  query_embedding: $('Format Query Embedding').item.json.embedding_string,\n  match_count: 20\n}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2496,
+        -128
+      ],
+      "id": "3fcb8f4b-8afe-40f7-8379-59571724b15c",
+      "name": "Hybrid Search",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BTfwspuM2D2okh34",
+          "name": "Supabase RAG Test"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst originalQuery = $('Init State').item.json.originalQuery;\n\nreturn [{\n  json: {\n    rerankBody: {\n      model: \"rerank-v3.5\",\n      query: originalQuery,\n      documents: items.map(i => i.json.content),\n      top_n: 5\n    },\n    candidates: items.map(i => ({\n      id: i.json.id,\n      content: i.json.content,\n      metadata: i.json.metadata,\n      hybrid_score: i.json.score,\n      dense_rank: i.json.dense_rank ?? null,\n      sparse_rank: i.json.sparse_rank ?? null,\n      dense_score: i.json.dense_score ?? null,\n      sparse_score: i.json.sparse_score ?? null,\n      chunk_index: i.json.metadata?.chunk_index\n    }))\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        -128
+      ],
+      "id": "ebfe6577-e627-4712-a871-8745002e07ac",
+      "name": "Build Rerank Input"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cohere.com/v2/rerank",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "cohereApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.rerankBody) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2944,
+        -128
+      ],
+      "id": "d260c224-9052-456e-80d0-4dd684ac90cb",
+      "name": "Cohere Rerank",
+      "credentials": {
+        "cohereApi": {
+          "id": "cGcv7mnHbgeUUfLF",
+          "name": "CohereApi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $json.results;\nconst candidates = $('Build Rerank Input').item.json.candidates;\n\nreturn results.map((r, position) => ({\n  json: {\n    rank: position + 1,\n    id: candidates[r.index].id,\n    chunk_index: candidates[r.index].chunk_index,\n    content: candidates[r.index].content,\n    metadata: candidates[r.index].metadata,\n    hybrid_score: candidates[r.index].hybrid_score,\n    dense_rank: candidates[r.index].dense_rank,\n    sparse_rank: candidates[r.index].sparse_rank,\n    dense_score: candidates[r.index].dense_score,\n    sparse_score: candidates[r.index].sparse_score,\n    relevance_score: r.relevance_score\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3168,
+        -128
+      ],
+      "id": "e945b041-132c-40cc-833b-8ec2cd1d1371",
+      "name": "Format Reranked"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-haiku-4-5-20251001",
+          "mode": "list",
+          "cachedResultName": "claude-haiku-4-5-20251001"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Question: {{ $('Init State').item.json.originalQuery }}\n\nRetrieved chunks (with rerank relevance scores from 0–1):\n{{ $json.chunks_text }}"
+            },
+            {
+              "content": "{\"relevant\":",
+              "role": "assistant"
+            }
+          ]
+        },
+        "simplify": false,
+        "options": {
+          "system": "You are a strict JSON-only API endpoint. You evaluate whether retrieved chunks contain information that answers a user's question.\n\nYOU MUST OUTPUT ONLY A VALID JSON OBJECT. NO PROSE. NO PREAMBLE. NO EXPLANATION OUTSIDE THE JSON.\n\nRequired output schema:\n{\n  \"evidence\": [\"<specific fact or quote from chunks that addresses the question>\", ...],\n  \"relevant\": <true if evidence array has 2+ items that address the core question, false otherwise>,\n  \"reason\": \"<one sentence justifying the verdict>\"\n}\n\nDecision rules:\n- relevant=true if the top-ranked chunks (rerank score >0.5) contain information that answers the core of the question, even if other chunks are tangential.\n- relevant=false only if NO chunk in the set is on-topic, OR if the top chunk only partially addresses the question with identifiable missing facts.\n- Focus on the strongest chunks. Ignore weak filler chunks at the bottom of the rerank list.\n- relevant=true if the answer can be assembled from multiple chunks, even if no single chunk fully answers the question. Scattered actionable information is still sufficient.\n\nExample valid outputs:\n{\"relevant\": true, \"reason\": \"The top chunk (score 0.88) directly states the price of the Apex Runner.\"}\n{\"relevant\": false, \"reason\": \"Top chunks discuss other products; no chunk mentions the requested SKU.\"}\n\nNow evaluate.",
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        3616,
+        -128
+      ],
+      "id": "ae078773-7b15-4070-aaa5-bfd208ee3631",
+      "name": "3. Grader",
+      "credentials": {
+        "anthropicApi": {
+          "id": "BsoMez4BNwa17pY1",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6c51fbb4-e4d6-4bbf-ba92-3db03dfdfd79",
+              "leftValue": "={{ $json.relevant }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4192,
+        -128
+      ],
+      "id": "de7a0748-c026-4b88-ba06-e45befdda4e8",
+      "name": "Relevant?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "af8095b4-8c39-4923-9663-39df87a2bc71",
+              "leftValue": "={{ Number($execution.customData.get('retryCount') ?? 0) }}",
+              "rightValue": "={{ Number($('Init State').item.json.maxRetries) }}",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4384,
+        -16
+      ],
+      "id": "aadc7362-0cd6-4f62-b842-eef6196fde08",
+      "name": "Can retry?"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-4-6",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-6"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Question: {{ $('Init State').item.json.originalQuery }}\n\nContext chunks:\n{{ $('Aggregate Chunks').item.json.chunks_text }}"
+            }
+          ]
+        },
+        "options": {
+          "system": "Answer the user's question using ONLY the provided context chunks.  Strict rules: - Cite each fact with [1], [2], etc. corresponding to chunk numbers - If the chunks don't fully answer, say what's missing — don't fabricate - Be concise but complete - Never make claims not supported by the chunks - If asked about something not in the chunks, say \"The provided documents don't address that.\""
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        4640,
+        -224
+      ],
+      "id": "4da93d31-ae6d-41da-8435-8e1a0d336cc3",
+      "name": "4. Generator",
+      "credentials": {
+        "anthropicApi": {
+          "id": "BsoMez4BNwa17pY1",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-4-6",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-6"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=={{ $('Init State').item.json.originalQuery }}"
+            }
+          ]
+        },
+        "options": {
+          "system": "You're a friendly research assistant. You have access to a document corpus, but the user's current message doesn't require document lookup. Respond naturally. If they ask something that would need documents, say so and invite them to ask a more specific question."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        4640,
+        160
+      ],
+      "id": "0f7deb46-8e42-4e91-9d21-2d27ed79613a",
+      "name": "Direct Answer",
+      "credentials": {
+        "anthropicApi": {
+          "id": "BsoMez4BNwa17pY1",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-4-6",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-6"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=User's question: {{ $('Init State').item.json.originalQuery }}\n\nSearch attempts made:\n{{ $('2. Rewriter').all().map((r, i) => `Attempt ${i+1}: ${r.json.content[0].text.trim()}`).join('\\n') }}\n\nTop reranked chunk (best match found, but judged not relevant):\nScore: {{ $('Format Reranked').first().json.relevance_score.toFixed(3) }}\nContent: {{ $('Format Reranked').first().json.content.slice(0, 300) }}...\n\nCompose your response to the user."
+            }
+          ]
+        },
+        "options": {
+          "system": "You are responding to a user whose question could not be answered from the available documents after multiple retrieval attempts.\n\nYou MUST refuse to answer the substance of the question. Do NOT use your training data to suggest products, brands, or recommendations. Do NOT speculate.\n\nRespond ONLY with:\n1. A clear statement that you don't have information about this topic in the knowledge base\n2. A brief description of what the knowledge base DOES cover (product catalog, fit, construction, care)  \n3. A suggestion to either rephrase or check the brand's official channels\n\nFormat: 2-3 sentences. No headers. No lists. No emojis. No specific product recommendations from outside the catalog."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        4640,
+        352
+      ],
+      "id": "d26e7630-d794-4952-b4fc-185d4ee10b80",
+      "name": "Give Up",
+      "credentials": {
+        "anthropicApi": {
+          "id": "BsoMez4BNwa17pY1",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        4992,
+        96
+      ],
+      "id": "36124652-d438-48c8-b125-cf1122c6002c",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "607b7a0d-563f-4ac3-b4e2-dd96afb0c141",
+              "name": "output",
+              "value": "={{ $('Merge').item.json.content[0].text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        5664,
+        112
+      ],
+      "id": "7144f9bb-3ec6-4c14-b78c-004e508430a4",
+      "name": "Final Output"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2073f046-9916-40a2-a5b4-9a6504026e60",
+              "leftValue": "={{ $json.decision }}",
+              "rightValue": "RETRIEVE",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1248,
+        64
+      ],
+      "id": "0d745fff-37f7-4153-9403-b23ca312c2a4",
+      "name": "Route Decision"
+    },
+    {
+      "parameters": {
+        "jsCode": "const chunks = $input.all();\n\nreturn [{\n  json: {\n    chunks_text: chunks.map((c, i) => \n      `[${i+1}] (id=${c.json.id}, chunk_index=${c.json.chunk_index}, score=${c.json.relevance_score.toFixed(3)})\\n${c.json.content}`\n    ).join('\\n\\n'),\n    chunks_array: chunks.map(c => c.json),\n    chunk_count: chunks.length\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3392,
+        -128
+      ],
+      "id": "2184d137-af23-4606-8e17-2af4e8df1bf4",
+      "name": "Aggregate Chunks"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.content[0].text.trim();\n\n// Strip markdown fences\nlet cleaned = raw.replace(/^```(?:json)?\\s*/, '').replace(/```\\s*$/, '').trim();\n\n// Prefill case: response may start mid-JSON\nif (!cleaned.startsWith('{')) {\n  cleaned = '{\"relevant\":' + cleaned;\n}\n\n// Find first complete JSON object, ignoring trailing content\nconst firstBrace = cleaned.indexOf('{');\nlet depth = 0, endIdx = -1;\nfor (let i = firstBrace; i < cleaned.length; i++) {\n  if (cleaned[i] === '{') depth++;\n  else if (cleaned[i] === '}') {\n    depth--;\n    if (depth === 0) { endIdx = i; break; }\n  }\n}\n\nconst jsonText = endIdx >= 0 ? cleaned.slice(firstBrace, endIdx + 1) : cleaned;\n\nlet parsed;\ntry {\n  parsed = JSON.parse(jsonText);\n} catch (e) {\n  parsed = { \n    relevant: false, \n    reason: 'Grader output not parseable: ' + raw.slice(0, 200) \n  };\n}\n\n// Handle both schemas: old {relevant, reason} and new {relevant, evidence, reason}\nlet reason = parsed.reason;\nif (!reason && Array.isArray(parsed.evidence)) {\n  reason = `Evidence: ${parsed.evidence.slice(0, 3).join(' | ')}`;\n}\n\nreturn [{\n  json: {\n    relevant: Boolean(parsed.relevant),\n    reason: reason || 'no reason given',\n    evidence: parsed.evidence || null,\n    raw_grader: raw\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3968,
+        -128
+      ],
+      "id": "6f7d0b0b-58a1-4e03-a1a7-db07c186cb51",
+      "name": "Parse Grader Output"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Use n8n's execution-scoped static data — persists across loop iterations\nconst current = $execution.customData.get('retryCount');\nconst newCount = (current ? Number(current) : 0) + 1;\n$execution.customData.set('retryCount', String(newCount));\n\n// Pass through the input data unchanged, just add retryCount for downstream visibility\nreturn $input.all().map(item => ({\n  json: {\n    ...item.json,\n    retryCount: newCount\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4704,
+        -32
+      ],
+      "id": "043df22e-298b-47bc-b54f-cffad0dddac7",
+      "name": "Increment Retry (Code)"
+    },
+    {
+      "parameters": {
+        "jsCode": "$execution.customData.set('retryCount', '0');\nconst staticData = $getWorkflowStaticData('global');\nstaticData.rewrites = [];\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        64
+      ],
+      "id": "7ba402fa-4946-434c-9579-da872992d600",
+      "name": "Reset Counter"
+    },
+    {
+      "parameters": {
+        "jsCode": "const initState = $('Init State').item.json;\nconst routeData = $('Router JSON Output').item.json;\nconst finalAnswer = $json.output ?? $json.content?.[0]?.text ?? '';\nlet finalPath = 'unknown';\nlet citationCount = 0;\n\nif (routeData.decision === 'DIRECT') {\n  finalPath = 'direct_answer';\n} else {\n  const citationMatches = finalAnswer.match(/\\[\\d+\\]/g) ?? [];\n  citationCount = citationMatches.length;\n  finalPath = citationCount > 0 ? 'generator' : 'give_up';\n}\n\nlet retrievedIds = null;\nlet retrievedChunks = null;\nlet topScore = null;\nlet graderVerdict = null;\nlet graderReason = null;\nlet rewrittenQueries = null;\n\nif (routeData.decision === 'RETRIEVE') {\n  try {\n    const reranked = $('Format Reranked').all();\n    retrievedIds = reranked.map(r => Number(r.json.id));\n    topScore = Math.max(...reranked.map(r => r.json.relevance_score));\n    retrievedChunks = reranked.map(r => ({\n      id: r.json.id,\n      chunk_index: r.json.chunk_index,\n      rank: r.json.rank,\n      relevance_score: r.json.relevance_score,\n      hybrid_score: r.json.hybrid_score,\n      dense_rank: r.json.dense_rank,\n      sparse_rank: r.json.sparse_rank,\n      dense_score: r.json.dense_score,\n      sparse_score: r.json.sparse_score,\n      content: r.json.content\n    }));\n  } catch (e) {}\n\n  try {\n    const grader = $('Parse Grader Output').item.json;\n    graderVerdict = grader.relevant;\n    graderReason = grader.reason;\n  } catch (e) {}\n\n  try {\n    const staticData = $getWorkflowStaticData('global');\n    rewrittenQueries = Array.isArray(staticData.rewrites) ? [...staticData.rewrites] : [];\n  } catch (e) {\n    rewrittenQueries = [];\n  }\n}\n\nconst startedAt = Number(initState.started_at);\nconst totalLatencyMs = Date.now() - startedAt;\nconst retryCount = Number($execution.customData.get('retryCount') ?? 0);\n\nreturn [{\n  json: {\n    session_id: initState.sessionId ?? null,\n    original_query: initState.originalQuery,\n    rewritten_queries: rewrittenQueries,\n    route_decision: routeData.decision,\n    route_reason: routeData.reason ?? routeData.reasoning ?? null,\n    retrieved_chunk_ids: retrievedIds,\n    retrieved_chunks: retrievedChunks,\n    retrieval_top_score: topScore,\n    retry_count: retryCount,\n    grader_verdict: graderVerdict,\n    grader_reason: graderReason,\n    final_path: finalPath,\n    final_answer: finalAnswer,\n    citation_count: citationCount,\n    total_latency_ms: totalLatencyMs,\n    metadata: {\n      n8n_execution_id: $execution.id ?? null\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5216,
+        112
+      ],
+      "id": "c13f71a6-da7a-46aa-81ad-4a311a843fbc",
+      "name": "Build Log Row"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hwunppacajmepdclbkmn.supabase.co/rest/v1/agent_runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": " Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh3dW5wcGFjYWptZXBkY2xia21uIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NDkyODkwMSwiZXhwIjoyMDcwNTA0OTAxfQ.buHCMhQt26qOjxjWSpqw92qu4oAFFbmkOBbbkw8mEgQ"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        5440,
+        112
+      ],
+      "id": "5c25efab-333d-43f8-bb26-382534441b22",
+      "name": "Log to Supabase",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BTfwspuM2D2okh34",
+          "name": "Supabase RAG Test"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json: JSON.parse($json.content[0].text)}]"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        64
+      ],
+      "id": "435f975b-f494-4242-b71f-ddf25d2508a7",
+      "name": "Router JSON Output"
+    },
+    {
+      "parameters": {
+        "jsCode": "const newRewrite = $json.content?.[0]?.text?.trim() ?? '';\n\nconst staticData = $getWorkflowStaticData('global');\nif (!Array.isArray(staticData.rewrites)) {\n  staticData.rewrites = [];\n}\nstaticData.rewrites.push(newRewrite);\n\nreturn $input.all();\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        -128
+      ],
+      "id": "3f47c4ff-6cae-486d-ad17-a44859643b3a",
+      "name": "Capture Rewrite"
+    },
+    {
+      "parameters": {
+        "jsCode": "const embedding = $json.data[0].embedding;\nconst embeddingString = '[' + embedding.join(',') + ']';\n\nreturn [{\n  json: {\n    embedding_string: embeddingString\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2272,
+        -128
+      ],
+      "id": "015a04a2-49a5-413c-8206-206bf4668fb6",
+      "name": "Format Query Embedding"
+    },
+    {
+      "parameters": {
+        "content": "ROUTING\n\nTo classify each incoming query as either retrieval-worthy or directly answerable",
+        "height": 352,
+        "width": 720
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        656,
+        -32
+      ],
+      "typeVersion": 1,
+      "id": "1c0076dd-df95-4a6d-a9ad-f019c6bbf072",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "REWRITE THE USER QUERY\n\nexpanding vocabulary, surfacing synonyms, and isolating key terms\n\nbridge the gap between how users naturally phrase questions and how the corpus actually describes the answers ",
+        "height": 432,
+        "width": 560,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1424,
+        -208
+      ],
+      "typeVersion": 1,
+      "id": "de4a8ecf-b9ed-4b00-bdc9-519be70bb749",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "HYBRID SEARCH\n\ncombine two complementary retrieval algorithms — semantic vector search for meaning and keyword (BM25) search for exact terms ",
+        "height": 336,
+        "width": 640,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2016,
+        -208
+      ],
+      "typeVersion": 1,
+      "id": "e54fccfe-664c-4f36-b50b-ac4201d69f98",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "Cohere Re-Ranking\n\n-Take the top candidates from hybrid search and re-score them with a more sophisticated cross-encoder model that reads each chunk against the original query like a human would\n\n promoting chunks that truly answer the question and demoting ones that only matched on surface-level lexical or semantic overlap. ",
+        "height": 432,
+        "width": 640,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2688,
+        -272
+      ],
+      "typeVersion": 1,
+      "id": "a21163ec-6cad-481c-b8f2-289cd6e60695",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "GRADER\n\n- To validate whether the retrieved chunks actually contain enough information to answer the user's question before passing them to the generator\n\n- acting as a guardrail that triggers a query rewrite-and-retry loop on weak retrieval and a graceful refusal when the corpus genuinely doesn't have the answer, preventing the agent from hallucinating from training data.",
+        "height": 432,
+        "width": 560,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3568,
+        -304
+      ],
+      "typeVersion": 1,
+      "id": "2e97014f-4ac1-4a36-b27a-6b1f08ae73d3",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "GENERATOR:\n\nTo synthesize a coherent, citation-grounded answer from the validated chunks ",
+        "height": 336,
+        "width": 544,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        4464,
+        -384
+      ],
+      "typeVersion": 1,
+      "id": "4a05ae8a-4261-49f4-b6e8-fecda991dbbc",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "To route the workflow based on the Grader's verdict",
+        "height": 304,
+        "width": 208
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        4144,
+        -240
+      ],
+      "typeVersion": 1,
+      "id": "3d95a830-8e43-4d69-97b6-b97f4cd3a5ea",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "content": "LOG TO SUPABASE\n\nFurther Analysis on RAG INSPECTOR",
+        "height": 416,
+        "width": 464
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        5168,
+        -48
+      ],
+      "typeVersion": 1,
+      "id": "8db2fcd0-e122-4984-8956-1a639696c867",
+      "name": "Sticky Note7"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Init State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init State": {
+      "main": [
+        [
+          {
+            "node": "Reset Counter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Router": {
+      "main": [
+        [
+          {
+            "node": "Router JSON Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Rewriter": {
+      "main": [
+        [
+          {
+            "node": "Capture Rewrite",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Voyage embed (query)": {
+      "main": [
+        [
+          {
+            "node": "Format Query Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hybrid Search": {
+      "main": [
+        [
+          {
+            "node": "Build Rerank Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Rerank Input": {
+      "main": [
+        [
+          {
+            "node": "Cohere Rerank",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cohere Rerank": {
+      "main": [
+        [
+          {
+            "node": "Format Reranked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Reranked": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Grader": {
+      "main": [
+        [
+          {
+            "node": "Parse Grader Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Relevant?": {
+      "main": [
+        [
+          {
+            "node": "4. Generator",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Can retry?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Can retry?": {
+      "main": [
+        [
+          {
+            "node": "Increment Retry (Code)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Direct Answer",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Give Up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Generator": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Direct Answer": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Give Up": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Build Log Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Decision": {
+      "main": [
+        [
+          {
+            "node": "2. Rewriter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Direct Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Chunks": {
+      "main": [
+        [
+          {
+            "node": "3. Grader",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Grader Output": {
+      "main": [
+        [
+          {
+            "node": "Relevant?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Increment Retry (Code)": {
+      "main": [
+        [
+          {
+            "node": "2. Rewriter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reset Counter": {
+      "main": [
+        [
+          {
+            "node": "1. Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Output": {
+      "main": [
+        []
+      ]
+    },
+    "Build Log Row": {
+      "main": [
+        [
+          {
+            "node": "Log to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router JSON Output": {
+      "main": [
+        [
+          {
+            "node": "Route Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Final Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture Rewrite": {
+      "main": [
+        [
+          {
+            "node": "Voyage embed (query)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Query Embedding": {
+      "main": [
+        [
+          {
+            "node": "Hybrid Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "0a0ac96b-d2c3-45ef-a826-c8f022c61980",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5ab9b4c37eb8b43602696add22a41d849e518c0ab0c7b3dc643eabbb296fcd72"
+  },
+  "id": "iJiqkKiE4JiqtUI6",
+  "tags": []
+}
